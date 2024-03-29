@@ -540,6 +540,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "mirror-auth"
+version = "0.1.1"
+dependencies = [
+ "base64",
+ "custom-logger",
+ "reqwest",
+ "serde",
+ "serde_derive",
+ "serde_json",
+ "serial_test",
+ "tokio-test",
+ "urlencoding",
+]
+
+[[package]]
 name = "native-tls"
 version = "0.2.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -737,21 +752,6 @@ dependencies = [
  "wasm-bindgen-futures",
  "web-sys",
  "winreg",
-]
-
-[[package]]
-name = "rust-mirror-auth"
-version = "0.1.0"
-dependencies = [
- "base64",
- "custom-logger",
- "reqwest",
- "serde",
- "serde_derive",
- "serde_json",
- "serial_test",
- "tokio-test",
- "urlencoding",
 ]
 
 [[package]]
