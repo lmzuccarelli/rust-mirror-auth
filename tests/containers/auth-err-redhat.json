@@ -1,0 +1,16 @@
+{
+	"auths": {
+		"cloud.openshift.com": {
+			"auth": "dGVzdDp0ZXN0Cg=="
+		},
+		"quay.io": {
+			"auth": "dGVzdDp0ZXN0Cg=="
+		},
+		"registry.ci.openshift.org": {
+			"auth": "dGVzdDp0ZXN0Cg=="
+		},
+		"registry.connect.redhat.com": {
+			"auth": "dGVzdDp0ZXN0Cg=="
+		}
+	}
+}

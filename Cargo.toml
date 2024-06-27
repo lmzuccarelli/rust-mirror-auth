@@ -1,13 +1,13 @@
 [package]
 name = "mirror-auth"
-version = "0.1.1"
+version = "0.3.0"
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
 base64 = { version = "0.21"}
-custom-logger = { git = "https://github.com/lmzuccarelli/rust-custom-logger", branch = "main" }
+custom-logger = { git = "https://github.com/lmzuccarelli/rust-custom-logger", branch = "main", version = "0.1.4" }
 urlencoding = "2.1.3"
 serde = "1.0.196"
 serde_derive = "1.0.196"
