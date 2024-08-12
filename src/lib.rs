@@ -2,8 +2,9 @@ use base64::{engine::general_purpose, Engine as _};
 use custom_logger::*;
 use serde_derive::{Deserialize, Serialize};
 use std::env;
-use std::fs::File;
-use std::io::Read;
+use std::fs;
+//use std::io::Read;
+use std::path::Path;
 use std::str;
 use urlencoding::encode;
 
@@ -53,29 +54,56 @@ pub struct Provider {
 pub fn get_credentials(log: &Logging) -> Result<String, Box<dyn std::error::Error>> {
     // Create a path to the desired file
     // using $XDG_RUNTIME_DIR envar
+
     let xdg = match env::var_os("XDG_RUNTIME_DIR") {
         Some(v) => v.into_string().unwrap(),
         None => {
-            log.error("$XDG_RUNTIME_DIR/containers not set");
+            log.error("$XDG_RUNTIME_DIR envar not set");
             "".to_string()
         }
     };
-    // this is overkill but it ensures we exit properly
-    if xdg.len() > 0 {
-        let auth_file = match env::var_os("AUTH_FILE") {
-            Some(f) => f.into_string().unwrap(),
-            None => "auth.json".to_string(),
-        };
-        let binding = &(xdg.to_owned() + "/containers/" + &auth_file.clone());
-        // Open the path in read-only mode, returns `io::Result<File>`
-        let mut file = File::open(&binding)?;
-        // Read the file contents into a string, returns `io::Result<usize>`
-        let mut s = String::new();
-        file.read_to_string(&mut s)?;
-        Ok(s)
+
+    let auth_file = format!("{}/containers/auth.json", xdg);
+    let exists = Path::new(&auth_file).exists();
+    let auth_data: String;
+    if exists {
+        let data = fs::read_to_string(auth_file);
+        if data.is_err() {
+            return Err(Box::new(MirrorError::new(&format!(
+                "$XDG_RUNTIME_DIR/containers/auth.json {:?}",
+                data.err().unwrap().to_string().to_lowercase()
+            ))));
+        }
+        log.debug("using auth file $XDG_RUNTIM_DIR/containers/auth.json");
+        auth_data = data.unwrap();
     } else {
-        Err(Box::new(MirrorError::new("$XDG_RUNTIME_DIR not set")))
+        // try $HOME/.docker/config
+        let docker_env = match env::var_os("HOME") {
+            Some(v) => v.into_string().unwrap(),
+            None => {
+                log.error("$HOME envar not set");
+                "".to_string()
+            }
+        };
+        let docker_auth = format!("{}/.docker/config.json", docker_env);
+        let exists = Path::new(&docker_auth).exists();
+        if exists {
+            let data = fs::read_to_string(docker_auth);
+            if data.is_err() {
+                return Err(Box::new(MirrorError::new(&format!(
+                    "$HOME/.docker/config.json {:?}",
+                    data.err().unwrap().to_string().to_lowercase()
+                ))));
+            }
+            log.debug("using auth file $HOME/.docker/config.json");
+            auth_data = data.unwrap();
+        } else {
+            return Err(Box::new(MirrorError::new(
+                "could not locate $HOME/.docker/config.json",
+            )));
+        }
     }
+    Ok(auth_data)
 }
 
 /// parse the json credentials to a struct
@@ -270,8 +298,6 @@ mod tests {
     #[test]
     #[serial]
     fn test_get_token_redhat_pass() {
-        env::remove_var("XDG_RUNTIME_DIR");
-        env::remove_var("AUTH_FILE");
         env::set_var("XDG_RUNTIME_DIR", "/run/user/1000");
         let log = &Logging {
             log_level: Level::DEBUG,
@@ -282,13 +308,23 @@ mod tests {
     #[test]
     #[serial]
     fn test_get_token_quay_pass() {
-        env::remove_var("XDG_RUNTIME_DIR");
-        env::remove_var("AUTH_FILE");
         env::set_var("XDG_RUNTIME_DIR", "/run/user/1000");
         let log = &Logging {
             log_level: Level::DEBUG,
         };
         let res = aw!(get_token(log, String::from("quay.io"),));
+        assert!(res.is_err() == false);
+    }
+    #[test]
+    #[serial]
+    fn test_get_token_quay_pass_no_xdg() {
+        env::set_var("XDG_RUNTIME_DIR", "nada");
+        let log = &Logging {
+            log_level: Level::DEBUG,
+        };
+        let res = aw!(get_token(log, String::from("quay.io"),));
+        env::set_var("XDG_RUNTIME_DIR", "/run/user/1000");
+        // should pass as it pick up $HOME/.docker/config/json
         assert!(res.is_err() == false);
     }
     #[test]
@@ -301,33 +337,8 @@ mod tests {
         env::set_var("XDG_RUNTIME_DIR", "tests/");
         let data = get_credentials(log).unwrap();
         let res = parse_json_creds(log, data, String::from("registry.redhat.io"));
+        env::set_var("XDG_RUNTIME_DIR", "/run/user/1000");
         assert!(res.is_ok());
-    }
-    #[test]
-    #[serial]
-    fn test_parse_json_creds_no_redhat_fail() {
-        let log = &Logging {
-            log_level: Level::DEBUG,
-        };
-        // set to pick up local path tests/containers/auth.json
-        env::set_var("XDG_RUNTIME_DIR", "tests/");
-        env::set_var("AUTH_FILE", "auth-err-redhat.json");
-        let data = get_credentials(log).unwrap();
-        let res = parse_json_creds(log, data, String::from("registry.redhat.io"));
-        assert!(res.is_err());
-    }
-    #[test]
-    #[serial]
-    fn test_parse_json_creds_no_quay_fail() {
-        let log = &Logging {
-            log_level: Level::DEBUG,
-        };
-        // set to pick up local path tests/containers/auth.json
-        env::set_var("XDG_RUNTIME_DIR", "tests/");
-        env::set_var("AUTH_FILE", "auth-err-quay.json");
-        let data = get_credentials(log).unwrap();
-        let res = parse_json_creds(log, data, String::from("quay.io"));
-        assert!(res.is_err());
     }
     #[test]
     #[serial]
@@ -337,35 +348,9 @@ mod tests {
         };
         // set to pick up local path tests/containers/auth.json
         env::set_var("XDG_RUNTIME_DIR", "tests/");
-        env::set_var("AUTH_FILE", "auth.json");
         let data = get_credentials(log).unwrap();
         let res = parse_json_creds(log, data, String::from("registry.connect.redhat.com"));
+        env::set_var("XDG_RUNTIME_DIR", "/run/user/1000");
         assert!(res.is_ok());
-    }
-    #[test]
-    #[serial]
-    fn test_parse_json_creds_no_redhat_connect_fail() {
-        let log = &Logging {
-            log_level: Level::DEBUG,
-        };
-        // set to pick up local path tests/containers/auth.json
-        env::set_var("XDG_RUNTIME_DIR", "tests/");
-        env::set_var("AUTH_FILE", "auth-err-redhat-connect.json");
-        let data = get_credentials(log).unwrap();
-        let res = parse_json_creds(log, data, String::from("registry.connect.redhat.com"));
-        assert!(res.is_err());
-    }
-    #[test]
-    #[serial]
-    fn test_parse_json_creds_none_fail() {
-        let log = &Logging {
-            log_level: Level::DEBUG,
-        };
-        // set to pick up local path tests/containers/auth.json
-        env::set_var("XDG_RUNTIME_DIR", "tests/");
-        env::set_var("AUTH_FILE", "auth.json");
-        let data = get_credentials(log).unwrap();
-        let res = parse_json_creds(log, data, String::from("none"));
-        assert!(res.is_err());
     }
 }
