@@ -1,9 +1,9 @@
 use base64::{engine::general_purpose, Engine as _};
 use custom_logger::*;
 use serde_derive::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::env;
 use std::fs;
-//use std::io::Read;
 use std::path::Path;
 use std::str;
 use urlencoding::encode;
@@ -27,20 +27,7 @@ pub struct Token {
 #[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Root {
-    pub auths: Auths,
-}
-
-#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Auths {
-    #[serde(rename = "cloud.openshift.com")]
-    pub cloud_openshift_com: Option<Provider>,
-    #[serde(rename = "quay.io")]
-    pub quay_io: Option<Provider>,
-    #[serde(rename = "registry.connect.redhat.com")]
-    pub registry_connect_redhat_com: Option<Provider>,
-    #[serde(rename = "registry.redhat.io")]
-    pub registry_redhat_io: Option<Provider>,
+    pub auths: HashMap<String, Provider>,
 }
 
 #[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -64,19 +51,21 @@ pub fn get_credentials(log: &Logging) -> Result<String, Box<dyn std::error::Erro
     };
 
     let auth_file = format!("{}/containers/auth.json", xdg);
-    let exists = Path::new(&auth_file).exists();
-    let auth_data: String;
+    let mut exists = Path::new(&auth_file).exists();
+    let mut auth_data: String = String::new();
     if exists {
         let data = fs::read_to_string(auth_file);
         if data.is_err() {
-            return Err(Box::new(MirrorError::new(&format!(
+            exists = false;
+            log.warn(&format!(
                 "$XDG_RUNTIME_DIR/containers/auth.json {:?}",
-                data.err().unwrap().to_string().to_lowercase()
-            ))));
+                data.as_ref().err().unwrap().to_string().to_lowercase()
+            ));
         }
-        log.debug("using auth file $XDG_RUNTIM_DIR/containers/auth.json");
+        log.debug("using auth file $XDG_RUNTIME_DIR/containers/auth.json");
         auth_data = data.unwrap();
-    } else {
+    }
+    if !exists {
         // try $HOME/.docker/config
         let docker_env = match env::var_os("HOME") {
             Some(v) => v.into_string().unwrap(),
@@ -107,51 +96,11 @@ pub fn get_credentials(log: &Logging) -> Result<String, Box<dyn std::error::Erro
 }
 
 /// parse the json credentials to a struct
-pub fn parse_json_creds(
-    log: &Logging,
-    data: String,
-    mode: String,
-) -> Result<String, Box<dyn std::error::Error>> {
+pub fn parse_json_creds(data: String, mode: String) -> Result<String, Box<dyn std::error::Error>> {
     // parse the string of data into serde_json::Root.
     let creds: Root = serde_json::from_str(&data)?;
-    match mode.as_str() {
-        "quay.io" => {
-            log.trace("using credentials for quay.io");
-            if creds.auths.quay_io.is_some() {
-                return Ok(creds.auths.quay_io.unwrap().auth);
-            } else {
-                return Err(Box::new(MirrorError::new(
-                    "no parsed credentials found for quay.io",
-                )));
-            }
-        }
-        "registry.redhat.io" => {
-            log.trace("using credentials for registry.redhat.io");
-            if creds.auths.registry_redhat_io.is_some() {
-                return Ok(creds.auths.registry_redhat_io.unwrap().auth);
-            } else {
-                return Err(Box::new(MirrorError::new(
-                    "no parsed credentials found for registry.redhat.io",
-                )));
-            }
-        }
-        "registry.connect.redhat.com" => {
-            log.trace("using credentials for registry.conenct.redhat.com");
-            if creds.auths.registry_connect_redhat_com.is_some() {
-                return Ok(creds.auths.registry_connect_redhat_com.unwrap().auth);
-            } else {
-                return Err(Box::new(MirrorError::new(
-                    "no parsed credentials found for registry.redhat.io",
-                )));
-            }
-        }
-        _ => {
-            return Err(Box::new(MirrorError::new(&format!(
-                "no credentials found for {}",
-                mode
-            ))));
-        }
-    }
+    let provider = &creds.auths[&mode];
+    Ok(provider.auth.clone())
 }
 
 /// parse the json from the api call
@@ -180,7 +129,6 @@ pub fn parse_json_token(data: String, mode: String) -> Result<String, Box<dyn st
 
 /// update quay.io account and urlencode
 fn update_url(url: String, account: String) -> String {
-    //let mut result = String::from("https://");
     let service = "quay%2Eio";
     let scope = "repository%3Aopenshift-release-dev%2Focp-v4.0-art-dev%3Apull";
     let account_encoded = encode(&account).to_string();
@@ -188,10 +136,6 @@ fn update_url(url: String, account: String) -> String {
         "https://{}account={}&service={}&scope={}",
         &url, &account_encoded, &service, &scope
     );
-    //url.push_str(&("account=".to_owned() + &account_encoded));
-    //url.push_str(&("&service=".to_owned() + &service));
-    //url.push_str(&("&scope=".to_owned() + &scope));
-    //result.push_str(&url);
     result
 }
 
@@ -220,20 +164,19 @@ pub async fn get_token(log: &Logging, name: String) -> Result<String, Box<dyn st
     let creds = get_credentials(log);
     // go style error handling
     if creds.is_err() {
-        //log.error(&format!("{:#?}", creds.err()));
         return Err(Box::new(MirrorError::new(&format!(
-            "get_credentials {:#?}",
-            creds.err()
+            "get_credentials {}",
+            creds.err().unwrap().to_string().to_lowercase()
         ))));
     }
     // parse the json data
-    let auth = parse_json_creds(&log, creds.as_ref().unwrap().to_string(), name.clone());
+    let auth = parse_json_creds(creds.as_ref().unwrap().to_string(), name.clone());
     // go style error handling
     if auth.is_err() {
         //log.error(&format!("{:#?}", auth.err()));
         return Err(Box::new(MirrorError::new(&format!(
-            "parse_json_creds {:#?}",
-            creds.err()
+            "parse_json_creds {}",
+            auth.err().unwrap().to_string().to_lowercase()
         ))));
     }
 
@@ -252,6 +195,7 @@ pub async fn get_token(log: &Logging, name: String) -> Result<String, Box<dyn st
         "quay.io" => {
             update_url("quay.io/v2/auth?".to_string(),user.to_string())
         },
+        "registry.ci.openshift.org" => format!("https://registry.ci.openshift.org/openshift/token?account={}scope=repository%3Aocp%2Frelease%3Apull",encode(user)),
         &_ => {
             // used for testing
             // return for the mockito server
@@ -266,7 +210,7 @@ pub async fn get_token(log: &Logging, name: String) -> Result<String, Box<dyn st
     if res.is_err() {
         return Err(Box::new(MirrorError::new(&format!(
             "get_auth_json {:#?}",
-            res.err()
+            res.err().unwrap().to_string().to_lowercase()
         ))));
     }
     let result = res.unwrap();
@@ -276,7 +220,7 @@ pub async fn get_token(log: &Logging, name: String) -> Result<String, Box<dyn st
     if token.is_err() {
         return Err(Box::new(MirrorError::new(&format!(
             "get_auth_json {:#?}",
-            token.err()
+            token.err().unwrap().to_string().to_lowercase()
         ))));
     }
     // we can now safely unwrap
@@ -298,7 +242,7 @@ mod tests {
     #[test]
     #[serial]
     fn test_get_token_redhat_pass() {
-        env::set_var("XDG_RUNTIME_DIR", "/run/user/1000");
+        //env::set_var("XDG_RUNTIME_DIR", "/run/user/1000");
         let log = &Logging {
             log_level: Level::DEBUG,
         };
@@ -308,7 +252,7 @@ mod tests {
     #[test]
     #[serial]
     fn test_get_token_quay_pass() {
-        env::set_var("XDG_RUNTIME_DIR", "/run/user/1000");
+        //env::set_var("XDG_RUNTIME_DIR", "/run/user/1000");
         let log = &Logging {
             log_level: Level::DEBUG,
         };
@@ -318,12 +262,12 @@ mod tests {
     #[test]
     #[serial]
     fn test_get_token_quay_pass_no_xdg() {
-        env::set_var("XDG_RUNTIME_DIR", "nada");
+        //env::set_var("XDG_RUNTIME_DIR", "nada");
         let log = &Logging {
             log_level: Level::DEBUG,
         };
         let res = aw!(get_token(log, String::from("quay.io"),));
-        env::set_var("XDG_RUNTIME_DIR", "/run/user/1000");
+        //env::set_var("XDG_RUNTIME_DIR", "/run/user/1000");
         // should pass as it pick up $HOME/.docker/config/json
         assert!(res.is_err() == false);
     }
@@ -334,10 +278,10 @@ mod tests {
             log_level: Level::DEBUG,
         };
         // set to pick up local path tests/containers/auth.json
-        env::set_var("XDG_RUNTIME_DIR", "tests/");
+        //env::set_var("XDG_RUNTIME_DIR", "tests/");
         let data = get_credentials(log).unwrap();
-        let res = parse_json_creds(log, data, String::from("registry.redhat.io"));
-        env::set_var("XDG_RUNTIME_DIR", "/run/user/1000");
+        let res = parse_json_creds(data, String::from("registry.redhat.io"));
+        //env::set_var("XDG_RUNTIME_DIR", "/run/user/1000");
         assert!(res.is_ok());
     }
     #[test]
@@ -347,10 +291,10 @@ mod tests {
             log_level: Level::DEBUG,
         };
         // set to pick up local path tests/containers/auth.json
-        env::set_var("XDG_RUNTIME_DIR", "tests/");
+        //env::set_var("XDG_RUNTIME_DIR", "tests/");
         let data = get_credentials(log).unwrap();
-        let res = parse_json_creds(log, data, String::from("registry.connect.redhat.com"));
-        env::set_var("XDG_RUNTIME_DIR", "/run/user/1000");
+        let res = parse_json_creds(data, String::from("registry.connect.redhat.com"));
+        //env::set_var("XDG_RUNTIME_DIR", "/run/user/1000");
         assert!(res.is_ok());
     }
 }
