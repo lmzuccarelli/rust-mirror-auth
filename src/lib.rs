@@ -188,8 +188,7 @@ pub async fn get_token(log: &Logging, name: String) -> Result<String, Box<dyn st
         Err(e) => panic!("invalid UTF-8 sequence: {}", e),
     };
     // get user and password form json
-    let user = s.split(":").nth(0).unwrap();
-    let pwd = s.split(":").nth(1).unwrap();
+    let (user, pwd) = s.split_once(":").unwrap();
     let token_url = match name.as_str() {
         "registry.redhat.io" => "https://sso.redhat.com/auth/realms/rhcc/protocol/redhat-docker-v2/auth?service=docker-registry&client_id=curl&scope=repository:rhel:pull".to_string(),
         "quay.io" => {
