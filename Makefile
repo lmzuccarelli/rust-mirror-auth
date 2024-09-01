@@ -11,10 +11,10 @@ build-debug:
 build:
 	cargo build --release
 
-test: clean
+test: clean-tests
 	CARGO_INCREMENTAL=0 RUSTFLAGS='-Cinstrument-coverage' LLVM_PROFILE_FILE='cargo-test-%p-%m.profraw' cargo test  -- --nocapture
 
-test-by-name: clean
+test-by-name: clean-tests
 	CARGO_INCREMENTAL=0 RUSTFLAGS='-Cinstrument-coverage' LLVM_PROFILE_FILE='cargo-test-%p-%m.profraw' cargo test $(TEST) -- --nocapture
 
 cover:
