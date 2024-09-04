@@ -108,12 +108,20 @@ impl TokenInterface for ImplTokenInterface {
             .header("User-Agent", "rust-mirror-auth")
             .send()
             .await;
-        if res.as_ref().unwrap().status() != StatusCode::OK {
-            return Err(MirrorError::new(&format!(
-                "[get_auth_json] api call {} {}",
-                url.clone(),
-                res.unwrap().status()
-            )));
+        if res.is_err() || res.as_ref().unwrap().status() != StatusCode::OK {
+            if res.is_err() {
+                return Err(MirrorError::new(&format!(
+                    "[get_auth_json] api call {} {}",
+                    url.clone(),
+                    res.err().unwrap().to_string()
+                )));
+            } else {
+                return Err(MirrorError::new(&format!(
+                    "[get_auth_json] api call {} {}",
+                    url.clone(),
+                    res.as_ref().unwrap().status()
+                )));
+            }
         }
         let body = res.unwrap().text().await;
         if body.is_err() {
@@ -220,8 +228,14 @@ pub fn parse_json_creds(data: String, mode: String) -> Result<String, MirrorErro
         )));
     }
     let creds: Root = res.unwrap();
-    let provider = &creds.auths[&mode];
-    Ok(provider.auth.clone())
+    let provider = &creds.auths.get(&mode);
+    if provider.is_none() {
+        return Err(MirrorError::new(&format!(
+            "[parse_json_creds] could not find key for {}",
+            mode
+        )));
+    }
+    Ok(provider.unwrap().auth.clone())
 }
 
 /// parse the json from the api call
