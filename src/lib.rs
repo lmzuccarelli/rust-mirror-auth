@@ -315,9 +315,7 @@ mod tests {
     #[test]
     #[serial]
     fn test_get_token_pass() {
-        let log = &Logging {
-            log_level: Level::TRACE,
-        };
+        let _ = Logging::new().with_level(LevelFilter::Trace).init();
 
         let fake = setup_mock();
         let res = aw!(get_token(
@@ -441,9 +439,7 @@ mod tests {
 
     #[test]
     fn get_credentials_file_pass() {
-        let log = &Logging {
-            log_level: Level::TRACE,
-        };
+        let _ = Logging::new().with_level(LevelFilter::Trace).init();
         let t_impl = ImplTokenInterface {};
         let res = aw!(t_impl.get_credentials(Some("tests/containers/auth.json".to_string())));
         assert_eq!(res.is_ok(), true);
@@ -451,9 +447,7 @@ mod tests {
 
     #[test]
     fn get_credentials_file_fail() {
-        let log = &Logging {
-            log_level: Level::TRACE,
-        };
+        let _ = Logging::new().with_level(LevelFilter::Trace).init();
         let t_impl = ImplTokenInterface {};
         let res_f = aw!(t_impl.get_credentials(Some("nada".to_string())));
         assert_eq!(res_f.is_ok(), true);
@@ -461,9 +455,7 @@ mod tests {
 
     #[test]
     fn get_credentials_xdg_pass() {
-        let log = &Logging {
-            log_level: Level::TRACE,
-        };
+        let _ = Logging::new().with_level(LevelFilter::Trace).init();
         unsafe {
             env::set_var("XDG_RUNTIME_DIR", "tests");
         }

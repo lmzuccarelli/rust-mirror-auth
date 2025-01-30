@@ -20,7 +20,7 @@ log = { version = "0.4", features = ["std"] }
 serial_test = "2.0.0"
 tokio-test = "0.4.3"
 mockito = "1.2.0"
-custom-logger = { git = "https://github.com/lmzuccarelli/rust-custom-logger", branch = "main", version = "0.1.4" }
+custom-logger = { git = "https://github.com/lmzuccarelli/rust-custom-logger", branch = "main", version = "0.2.0" }
 
 
 [lib]
