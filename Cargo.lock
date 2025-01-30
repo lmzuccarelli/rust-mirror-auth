@@ -697,6 +697,7 @@ dependencies = [
  "async-trait",
  "base64",
  "custom-logger",
+ "log",
  "mirror-error",
  "mockito",
  "reqwest",

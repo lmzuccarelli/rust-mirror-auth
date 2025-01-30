@@ -1,6 +1,5 @@
 use async_trait::async_trait;
 use base64::{engine::general_purpose, Engine as _};
-use custom_logger::*;
 use mirror_error::MirrorError;
 use reqwest::StatusCode;
 use serde_derive::{Deserialize, Serialize};
@@ -41,11 +40,7 @@ pub struct ImplTokenInterface {}
 
 #[async_trait]
 pub trait TokenInterface {
-    async fn get_credentials(
-        &self,
-        log: &Logging,
-        file: Option<String>,
-    ) -> Result<String, MirrorError>;
+    async fn get_credentials(&self, file: Option<String>) -> Result<String, MirrorError>;
     async fn get_auth_json(&self, url: String, auth: String) -> Result<String, MirrorError>;
     // this allows us to inject file read errors for testing
     async fn read_file(&self, file: String) -> Result<String, MirrorError>;
@@ -54,16 +49,12 @@ pub trait TokenInterface {
 #[async_trait]
 impl TokenInterface for ImplTokenInterface {
     // read the credentials from set path (see podman credential reference)
-    async fn get_credentials(
-        &self,
-        log: &Logging,
-        file: Option<String>,
-    ) -> Result<String, MirrorError> {
+    async fn get_credentials(&self, file: Option<String>) -> Result<String, MirrorError> {
         // using $XDG_RUNTIME_DIR envar
         let xdg = match env::var_os("XDG_RUNTIME_DIR") {
             Some(v) => v.into_string().unwrap(),
             None => {
-                log.error("$XDG_RUNTIME_DIR envar not set");
+                log::error!("$XDG_RUNTIME_DIR envar not set");
                 "".to_string()
             }
         };
@@ -82,7 +73,7 @@ impl TokenInterface for ImplTokenInterface {
             let docker_env = match env::var_os("HOME") {
                 Some(v) => v.into_string().unwrap(),
                 None => {
-                    log.error("$HOME envar not set");
+                    log::error!("$HOME envar not set");
                     "".to_string()
                 }
             };
@@ -148,7 +139,6 @@ impl TokenInterface for ImplTokenInterface {
 /// process all relative functions in this module to actually get the token
 pub async fn get_token<T: TokenInterface>(
     t_impl: T,
-    log: &Logging,
     name: String,
     namespace: String,
     enabled: bool,
@@ -157,7 +147,7 @@ pub async fn get_token<T: TokenInterface>(
         return Ok("".to_string());
     }
     // get creds from $XDG_RUNTIME_DIR
-    let creds = t_impl.get_credentials(log, None).await?;
+    let creds = t_impl.get_credentials(None).await?;
     // parse the json data
     let auth = parse_json_creds(creds.clone(), name.clone())?;
     // decode to base64
@@ -264,6 +254,7 @@ pub fn parse_json_token(data: String) -> Result<String, MirrorError> {
 mod tests {
     // this brings everything from parent's scope
     use super::*;
+    use custom_logger::*;
     use serial_test::serial;
 
     macro_rules! aw {
@@ -278,11 +269,7 @@ mod tests {
     fn setup_mock() -> Fake {
         #[async_trait]
         impl TokenInterface for Fake {
-            async fn get_credentials(
-                &self,
-                _log: &Logging,
-                _file: Option<String>,
-            ) -> Result<String, MirrorError> {
+            async fn get_credentials(&self, _file: Option<String>) -> Result<String, MirrorError> {
                 let json_data = r#"{ 
                   "auths":{
                     "registry.redhat.io": {
@@ -335,7 +322,6 @@ mod tests {
         let fake = setup_mock();
         let res = aw!(get_token(
             fake.clone(),
-            log,
             "registry.redhat.io".to_string(),
             "".to_string(),
             true
@@ -344,7 +330,6 @@ mod tests {
 
         let res_q = aw!(get_token(
             fake.clone(),
-            log,
             "quay.io".to_string(),
             "".to_string(),
             true
@@ -353,7 +338,6 @@ mod tests {
 
         let res_r = aw!(get_token(
             fake.clone(),
-            log,
             "registry.ci.openshift.org".to_string(),
             "".to_string(),
             true
@@ -362,7 +346,6 @@ mod tests {
 
         let res_o = aw!(get_token(
             fake.clone(),
-            log,
             "other".to_string(),
             "".to_string(),
             true
@@ -371,7 +354,6 @@ mod tests {
 
         let res_o = aw!(get_token(
             fake.clone(),
-            log,
             "broken".to_string(),
             "".to_string(),
             true
@@ -380,7 +362,6 @@ mod tests {
 
         let res_o = aw!(get_token(
             fake.clone(),
-            log,
             "none".to_string(),
             "".to_string(),
             false
@@ -464,7 +445,7 @@ mod tests {
             log_level: Level::TRACE,
         };
         let t_impl = ImplTokenInterface {};
-        let res = aw!(t_impl.get_credentials(log, Some("tests/containers/auth.json".to_string())));
+        let res = aw!(t_impl.get_credentials(Some("tests/containers/auth.json".to_string())));
         assert_eq!(res.is_ok(), true);
     }
 
@@ -474,7 +455,7 @@ mod tests {
             log_level: Level::TRACE,
         };
         let t_impl = ImplTokenInterface {};
-        let res_f = aw!(t_impl.get_credentials(log, Some("nada".to_string())));
+        let res_f = aw!(t_impl.get_credentials(Some("nada".to_string())));
         assert_eq!(res_f.is_ok(), true);
     }
 
@@ -487,7 +468,7 @@ mod tests {
             env::set_var("XDG_RUNTIME_DIR", "tests");
         }
         let t_impl = ImplTokenInterface {};
-        let res_f = aw!(t_impl.get_credentials(log, None));
+        let res_f = aw!(t_impl.get_credentials(None));
         assert_eq!(res_f.is_ok(), true);
     }
 }
