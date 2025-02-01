@@ -5,8 +5,10 @@ use reqwest::StatusCode;
 use serde_derive::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::env;
+use std::ffi::OsString;
 use std::fs;
 use std::path::Path;
+use std::path::PathBuf;
 use std::str;
 use urlencoding::encode;
 
@@ -43,7 +45,7 @@ pub trait TokenInterface {
     async fn get_credentials(&self, file: Option<String>) -> Result<String, MirrorError>;
     async fn get_auth_json(&self, url: String, auth: String) -> Result<String, MirrorError>;
     // this allows us to inject file read errors for testing
-    async fn read_file(&self, file: String) -> Result<String, MirrorError>;
+    async fn read_file<P: AsRef<Path> + Send>(&self, file: P) -> Result<String, MirrorError>;
 }
 
 #[async_trait]
@@ -51,43 +53,31 @@ impl TokenInterface for ImplTokenInterface {
     // read the credentials from set path (see podman credential reference)
     async fn get_credentials(&self, file: Option<String>) -> Result<String, MirrorError> {
         // using $XDG_RUNTIME_DIR envar
-        let xdg = match env::var_os("XDG_RUNTIME_DIR") {
-            Some(v) => v.into_string().unwrap(),
-            None => {
-                log::error!("$XDG_RUNTIME_DIR envar not set");
-                "".to_string()
-            }
-        };
-        let auth_data: String;
-        let auth_file: String;
-        if file.is_some() {
-            auth_file = format!("{}", file.unwrap());
-        } else {
-            auth_file = format!("{}/containers/auth.json", xdg);
-        }
-        let exists = Path::new(&auth_file).exists();
-        if exists {
-            auth_data = self.read_file(auth_file.clone()).await?;
+        let xdg = env::var_os("XDG_RUNTIME_DIR").unwrap_or_else(|| {
+            log::error!("$XDG_RUNTIME_DIR envar not set");
+            OsString::new()
+        });
+        let auth_file = file
+            .map(PathBuf::from)
+            .unwrap_or(Path::new(&xdg).join("containers/auth.json"));
+        if auth_file.exists() {
+            self.read_file(&auth_file).await
         } else {
             // try $HOME/.docker/config
-            let docker_env = match env::var_os("HOME") {
-                Some(v) => v.into_string().unwrap(),
-                None => {
-                    log::error!("$HOME envar not set");
-                    "".to_string()
-                }
-            };
-            let docker_auth = format!("{}/.docker/config.json", docker_env);
-            let exists = Path::new(&docker_auth).exists();
-            if exists {
-                auth_data = self.read_file(docker_auth).await?;
+            let docker_env = env::var_os("HOME").unwrap_or_else(|| {
+                log::error!("$HOME envar not set");
+                OsString::new()
+            });
+            let docker_auth = Path::new(&docker_env).join(".docker/config.json");
+            if docker_auth.exists() {
+                self.read_file(docker_auth).await
             } else {
-                return Err(MirrorError::new(
-                    "[get_credentials] could not locate $HOME/.docker/config.json",
-                ));
+                Err(MirrorError::new(&format!(
+                    "[get_credentials] could not locate {}",
+                    docker_auth.display()
+                )))
             }
         }
-        Ok(auth_data)
     }
 
     /// async api call with basic auth
@@ -95,44 +85,30 @@ impl TokenInterface for ImplTokenInterface {
         let client = reqwest::Client::new();
         let res = client
             .get(&url)
-            .header("Authorization", format!("Basic {}", auth.clone()))
+            .header("Authorization", format!("Basic {}", auth))
             .header("User-Agent", "rust-mirror-auth")
             .send()
-            .await;
-        if res.is_err() || res.as_ref().unwrap().status() != StatusCode::OK {
-            if res.is_err() {
-                return Err(MirrorError::new(&format!(
-                    "[get_auth_json] api call {} {}",
-                    url.clone(),
-                    res.err().unwrap().to_string()
-                )));
-            } else {
-                return Err(MirrorError::new(&format!(
-                    "[get_auth_json] api call {} {}",
-                    url.clone(),
-                    res.as_ref().unwrap().status()
-                )));
-            }
-        }
-        let body = res.unwrap().text().await;
-        if body.is_err() {
+            .await
+            .map_err(|e| MirrorError::new(&format!("[get_auth_json] api call {} {}", url, e)))?;
+
+        if res.status() != StatusCode::OK {
             return Err(MirrorError::new(&format!(
-                "[get_auth_json] reading body {}",
-                body.err().unwrap().to_string().to_lowercase()
+                "[get_auth_json] api call {} {}",
+                url,
+                res.status()
             )));
         }
-        Ok(body.unwrap())
+        res.text().await.map_err(|e| {
+            MirrorError::new(&format!(
+                "[get_auth_json] reading body {}",
+                e.to_string().to_lowercase()
+            ))
+        })
     }
 
-    async fn read_file(&self, file: String) -> Result<String, MirrorError> {
-        let res = fs::read_to_string(file.clone());
-        if res.is_err() {
-            return Err(MirrorError::new(&format!(
-                "[read_file] {}",
-                res.as_ref().unwrap().to_string().to_lowercase()
-            )));
-        }
-        Ok(res.unwrap())
+    async fn read_file<P: AsRef<Path> + Send>(&self, file: P) -> Result<String, MirrorError> {
+        fs::read_to_string(file)
+            .map_err(|e| MirrorError::new(&format!("[read_file] {}", e.to_string().to_lowercase())))
     }
 }
 
@@ -151,25 +127,21 @@ pub async fn get_token<T: TokenInterface>(
     // parse the json data
     let auth = parse_json_creds(creds.clone(), name.clone())?;
     // decode to base64
-    let res_bytes = general_purpose::STANDARD.decode(auth.clone());
-    if res_bytes.is_err() {
-        return Err(MirrorError::new(&format!(
+    let res_bytes = general_purpose::STANDARD.decode(&auth).map_err(|e| {
+        MirrorError::new(&format!(
             "[get_token] base64 decode {}",
-            res_bytes.as_ref().err().unwrap().to_string().to_lowercase()
-        )));
-    };
-    let s = match str::from_utf8(&res_bytes.as_ref().unwrap()) {
-        Ok(v) => v,
-        Err(e) => {
-            return Err(MirrorError::new(&format!(
-                "[get_token] get auth json {}",
-                e.to_string().to_lowercase()
-            )));
-        }
-    };
+            e.to_string().to_lowercase()
+        ))
+    })?;
+    let s = str::from_utf8(&res_bytes).map_err(|e| {
+        MirrorError::new(&format!(
+            "[get_token] get auth json {}",
+            e.to_string().to_lowercase()
+        ))
+    })?;
 
     // get user from json
-    let (user, _) = s.split_once(":").unwrap();
+    let (user, _) = s.split_once(':').unwrap();
     let token_url = match name.as_str() {
                 "registry.redhat.io" => format!(
                 "https://sso.redhat.com/auth/realms/rhcc/protocol/redhat-docker-v2/auth?service=docker-registry&client_id=curl&scope={}",encode("repository:rhel:pull")
@@ -201,53 +173,41 @@ pub async fn get_token<T: TokenInterface>(
 
     // call the realm url to get a token with the creds
     let res = t_impl.get_auth_json(token_url, auth.to_string()).await?;
-    let result = res.clone();
     // if all goes well we should have a valid token
-    let token = parse_json_token(result)?;
-    Ok(token.clone())
+    parse_json_token(res)
 }
 
 /// parse the json credentials to a struct
 pub fn parse_json_creds(data: String, mode: String) -> Result<String, MirrorError> {
     // parse the string of data into serde_json::Root.
-    let res = serde_json::from_str(&data);
-    if res.is_err() {
-        return Err(MirrorError::new(&format!(
+    let creds: Root = serde_json::from_str(&data).map_err(|e| {
+        MirrorError::new(&format!(
             "[parse_json_creds] {}",
-            res.err().unwrap().to_string().to_lowercase()
-        )));
-    }
-    let creds: Root = res.unwrap();
-    let provider = &creds.auths.get(&mode);
-    if provider.is_none() {
-        return Err(MirrorError::new(&format!(
+            e.to_string().to_lowercase()
+        ))
+    })?;
+    creds
+        .auths
+        .get(&mode)
+        .map(|p| p.auth.clone())
+        .ok_or(MirrorError::new(&format!(
             "[parse_json_creds] could not find key for {}",
             mode
-        )));
-    }
-    Ok(provider.unwrap().auth.clone())
+        )))
 }
 
 /// parse the json from the api call
 pub fn parse_json_token(data: String) -> Result<String, MirrorError> {
     // parse the string of data into serde_json::Token.
-    let res = serde_json::from_str(&data);
-    if res.is_err() {
-        return Err(MirrorError::new(&format!(
+    let root: Token = serde_json::from_str(&data).map_err(|e| {
+        MirrorError::new(&format!(
             "[parse_json_token] {}",
-            res.err().unwrap().to_string().to_lowercase()
-        )));
-    }
-    let root: Token = res.unwrap();
-    if root.token.is_some() {
-        return Ok(root.token.unwrap());
-    }
-    if root.access_token.is_some() {
-        return Ok(root.access_token.unwrap());
-    }
-    return Err(MirrorError::new(
+            e.to_string().to_lowercase()
+        ))
+    })?;
+    root.token.or(root.access_token).ok_or(MirrorError::new(
         "[parse_json_token] could not parse access_token or token fields",
-    ));
+    ))
 }
 
 #[cfg(test)]
@@ -304,12 +264,14 @@ mod tests {
                 }"#;
                 Ok(result.to_string())
             }
-            async fn read_file(&self, _file: String) -> Result<String, MirrorError> {
+            async fn read_file<P: AsRef<Path> + Send>(
+                &self,
+                _file: P,
+            ) -> Result<String, MirrorError> {
                 Ok("ok".to_string())
             }
         }
-        let fake = Fake {};
-        fake
+        Fake {}
     }
 
     #[test]
@@ -324,7 +286,7 @@ mod tests {
             "".to_string(),
             true
         ));
-        assert_eq!(res.is_ok(), true);
+        assert!(res.is_ok());
 
         let res_q = aw!(get_token(
             fake.clone(),
@@ -332,7 +294,7 @@ mod tests {
             "".to_string(),
             true
         ));
-        assert_eq!(res_q.is_ok(), true);
+        assert!(res_q.is_ok());
 
         let res_r = aw!(get_token(
             fake.clone(),
@@ -340,7 +302,7 @@ mod tests {
             "".to_string(),
             true
         ));
-        assert_eq!(res_r.is_ok(), true);
+        assert!(res_r.is_ok());
 
         let res_o = aw!(get_token(
             fake.clone(),
@@ -348,7 +310,7 @@ mod tests {
             "".to_string(),
             true
         ));
-        assert_eq!(res_o.is_ok(), true);
+        assert!(res_o.is_ok());
 
         let res_o = aw!(get_token(
             fake.clone(),
@@ -356,7 +318,7 @@ mod tests {
             "".to_string(),
             true
         ));
-        assert_eq!(res_o.is_err(), true);
+        assert!(res_o.is_err());
 
         let res_o = aw!(get_token(
             fake.clone(),
@@ -364,21 +326,21 @@ mod tests {
             "".to_string(),
             false
         ));
-        assert_eq!(res_o.is_ok(), true);
+        assert!(res_o.is_ok());
     }
 
     #[test]
     fn parse_json_creds_fail() {
         let data = "{".to_string();
         let res = parse_json_creds(data, "other".to_string());
-        assert_eq!(res.is_err(), true);
+        assert!(res.is_err());
     }
 
     #[test]
     fn parse_json_token_fail() {
         let data = "{".to_string();
         let res = parse_json_token(data);
-        assert_eq!(res.is_err(), true);
+        assert!(res.is_err());
     }
 
     #[test]
@@ -389,7 +351,7 @@ mod tests {
                     "issued_at":"2023-10-20T13:23:31Z"
                 }"#;
         let res = parse_json_token(data.to_string());
-        assert_eq!(res.is_err(), true);
+        assert!(res.is_err());
     }
 
     #[test]
@@ -400,7 +362,7 @@ mod tests {
                     "issued_at":"2023-10-20T13:23:31Z"
                 }"#;
         let res = parse_json_token(data.to_string());
-        assert_eq!(res.is_ok(), true);
+        assert!(res.is_ok());
     }
 
     #[test]
@@ -431,10 +393,10 @@ mod tests {
             .create();
 
         let res = aw!(t_impl.get_auth_json(format!("{}/v2/auth", url), "auth".to_string()));
-        assert_eq!(res.is_ok(), true);
+        assert!(res.is_ok());
 
         let res = aw!(t_impl.get_auth_json(format!("{}/v2/error", url), "auth".to_string()));
-        assert_eq!(res.is_err(), true);
+        assert!(res.is_err());
     }
 
     #[test]
@@ -442,7 +404,7 @@ mod tests {
         let _ = Logging::new().with_level(LevelFilter::Trace).init();
         let t_impl = ImplTokenInterface {};
         let res = aw!(t_impl.get_credentials(Some("tests/containers/auth.json".to_string())));
-        assert_eq!(res.is_ok(), true);
+        assert!(res.is_ok());
     }
 
     #[test]
@@ -450,17 +412,15 @@ mod tests {
         let _ = Logging::new().with_level(LevelFilter::Trace).init();
         let t_impl = ImplTokenInterface {};
         let res_f = aw!(t_impl.get_credentials(Some("nada".to_string())));
-        assert_eq!(res_f.is_ok(), true);
+        assert!(res_f.is_err());
     }
 
     #[test]
     fn get_credentials_xdg_pass() {
         let _ = Logging::new().with_level(LevelFilter::Trace).init();
-        unsafe {
-            env::set_var("XDG_RUNTIME_DIR", "tests");
-        }
+        env::set_var("XDG_RUNTIME_DIR", "tests");
         let t_impl = ImplTokenInterface {};
         let res_f = aw!(t_impl.get_credentials(None));
-        assert_eq!(res_f.is_ok(), true);
+        assert!(res_f.is_ok());
     }
 }
