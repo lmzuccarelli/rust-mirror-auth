@@ -202,10 +202,12 @@ checksum = "06ea2b9bc92be3c2baa9334a323ebca2d6f074ff852cd1d7b11064035cd3868f"
 
 [[package]]
 name = "custom-logger"
-version = "0.1.4"
-source = "git+https://github.com/lmzuccarelli/rust-custom-logger?branch=main#f0ab24a95fdad4ed0df9f217f6add076f1d34897"
+version = "0.2.0"
+source = "git+https://github.com/lmzuccarelli/rust-custom-logger?branch=main#879eeefe99d0ea900984b0df817bce932b76caf9"
 dependencies = [
  "chrono",
+ "colored",
+ "log",
 ]
 
 [[package]]
@@ -692,11 +694,12 @@ dependencies = [
 
 [[package]]
 name = "mirror-auth"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "async-trait",
  "base64",
  "custom-logger",
+ "log",
  "mirror-error",
  "mockito",
  "reqwest",
