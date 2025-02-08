@@ -217,11 +217,10 @@ mod tests {
     #[derive(Clone)]
     struct Fake {}
 
-    fn setup_mock() -> Fake {
-        #[async_trait]
-        impl TokenInterface for Fake {
-            async fn get_credentials(&self, _file: Option<String>) -> Result<String, MirrorError> {
-                let json_data = r#"{ 
+    #[async_trait]
+    impl TokenInterface for Fake {
+        async fn get_credentials(&self, _file: Option<String>) -> Result<String, MirrorError> {
+            let json_data = r#"{ 
                   "auths":{
                     "registry.redhat.io": {
                       "auth":"aGVsbG86d29ybGQK"
@@ -240,28 +239,23 @@ mod tests {
                     }
                   }
                 }"#;
-                Ok(json_data.to_string())
-            }
-            async fn get_auth_json(
-                &self,
-                _url: String,
-                _auth: String,
-            ) -> Result<String, MirrorError> {
-                let result = r#"{
+            Ok(json_data.to_string())
+        }
+        async fn get_auth_json(&self, _url: String, _auth: String) -> Result<String, MirrorError> {
+            let result = r#"{
                     "token": "test",
                     "access_token": "aebcdef1234567890",
                     "expires_in":300,
                     "issued_at":"2023-10-20T13:23:31Z"
                 }"#;
-                Ok(result.to_string())
-            }
-            async fn read_file<P: AsRef<Path> + Send>(
-                &self,
-                _file: P,
-            ) -> Result<String, MirrorError> {
-                Ok("ok".to_string())
-            }
+            Ok(result.to_string())
         }
+        async fn read_file<P: AsRef<Path> + Send>(&self, _file: P) -> Result<String, MirrorError> {
+            Ok("ok".to_string())
+        }
+    }
+
+    fn setup_mock() -> Fake {
         Fake {}
     }
 
