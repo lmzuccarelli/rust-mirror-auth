@@ -393,6 +393,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn get_credentials_file_fail() {
         let _ = Logging::new().with_level(LevelFilter::Trace).init();
         let t_impl = ImplTokenInterface {};
@@ -401,11 +402,14 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn get_credentials_xdg_pass() {
         let _ = Logging::new().with_level(LevelFilter::Trace).init();
+        let orig = env::var_os("XDG_RUNTIME_DIR");
         env::set_var("XDG_RUNTIME_DIR", "tests");
         let t_impl = ImplTokenInterface {};
         let res_f = aw!(t_impl.get_credentials(None));
+        env::set_var("XDG_RUNTIME_DIR", orig.unwrap_or_default());
         assert!(res_f.is_ok());
     }
 }
