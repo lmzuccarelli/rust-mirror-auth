@@ -5,7 +5,6 @@ use reqwest::StatusCode;
 use serde_derive::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::env;
-use std::ffi::OsString;
 use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
@@ -52,31 +51,23 @@ pub trait TokenInterface {
 impl TokenInterface for ImplTokenInterface {
     // read the credentials from set path (see podman credential reference)
     async fn get_credentials(&self, file: Option<String>) -> Result<String, MirrorError> {
-        // using $XDG_RUNTIME_DIR envar
-        let xdg = env::var_os("XDG_RUNTIME_DIR").unwrap_or_else(|| {
-            log::error!("$XDG_RUNTIME_DIR envar not set");
-            OsString::new()
-        });
-        let auth_file = file
+        let mut auth_file_chain = file
             .map(PathBuf::from)
-            .unwrap_or(Path::new(&xdg).join("containers/auth.json"));
-        if auth_file.exists() {
-            self.read_file(&auth_file).await
+            .into_iter()
+            // podman overriden default path
+            .chain(env::var_os("REGISTRY_AUTH_FILE").map(PathBuf::from))
+            // podman credential default path
+            .chain(
+                env::var_os("XDG_RUNTIME_DIR")
+                    .map(|s| PathBuf::from(s).join("containers/auth.json")),
+            )
+            // docker credential default path
+            .chain(env::var_os("HOME").map(|s| PathBuf::from(s).join(".docker/config.json")));
+        if let Some(f) = auth_file_chain.find(|f| f.exists()) {
+            log::debug!("loading credentials from {}", f.display());
+            self.read_file(&f).await
         } else {
-            // try $HOME/.docker/config
-            let docker_env = env::var_os("HOME").unwrap_or_else(|| {
-                log::error!("$HOME envar not set");
-                OsString::new()
-            });
-            let docker_auth = Path::new(&docker_env).join(".docker/config.json");
-            if docker_auth.exists() {
-                self.read_file(docker_auth).await
-            } else {
-                Err(MirrorError::new(&format!(
-                    "[get_credentials] could not locate {}",
-                    docker_auth.display()
-                )))
-            }
+            Err(MirrorError::new("[get_credentials] could not locate creds"))
         }
     }
 
